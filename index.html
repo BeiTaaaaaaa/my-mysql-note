@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>我的炫酷仓库浏览器</title>
+    <style>
+        /* 全局重置，确保 canvas 全屏且无滚动干扰 */
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: 'Arial', sans-serif;
+            color: #fff;
+        }
+
+        /* 画布背景层 */
+        #canvas-bg {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            pointer-events: none; /* 让鼠标事件穿透到上层内容，但粒子动画依然能响应鼠标 */
+        }
+
+        /* 内容层 */
+        .content {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none; /* 让点击穿透到画布？不行，我们需要点击链接，所以内容区域要允许事件 */
+        }
+
+        /* 卡片容器：半透明背景，让文字更易读 */
+        .card {
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(5px);
+            border-radius: 16px;
+            padding: 30px 40px;
+            max-width: 600px;
+            width: 80%;
+            max-height: 70%;
+            overflow-y: auto;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            pointer-events: auto; /* 卡片内部可以点击 */
+        }
+
+        h1 {
+            text-align: center;
+            margin-top: 0;
+            font-weight: 300;
+            letter-spacing: 2px;
+            border-bottom: 1px solid rgba(255,255,255,0.3);
+            padding-bottom: 15px;
+            text-shadow: 0 2px 10px rgba(0,0,0,0.5);
+        }
+
+        #file-list {
+            margin-top: 20px;
+        }
+
+        ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        li {
+            margin: 8px 0;
+            padding: 10px 15px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            transition: transform 0.2s, background 0.2s;
+            border-left: 3px solid transparent;
+        }
+
+        li:hover {
+            transform: translateX(5px);
+            background: rgba(255, 255, 255, 0.2);
+            border-left-color: #00ffff;
+        }
+
+        a {
+            color: #fff;
+            text-decoration: none;
+            display: block;
+            font-size: 16px;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .file::before {
+            content: "📄 ";
+            margin-right: 8px;
+            filter: drop-shadow(0 2px 2px #000);
+        }
+
+        .folder::before {
+            content: "📁 ";
+            margin-right: 8px;
+            filter: drop-shadow(0 2px 2px #000);
+        }
+
+        /* 加载状态 */
+        .loading {
+            text-align: center;
+            color: rgba(255,255,255,0.8);
+            font-style: italic;
+        }
+
+        /* 错误信息 */
+        .error {
+            color: #ff7f7f;
+            text-align: center;
+        }
+
+        /* 自定义滚动条 */
+        .card::-webkit-scrollbar {
+            width: 6px;
+        }
+        .card::-webkit-scrollbar-track {
+            background: rgba(255,255,255,0.1);
+            border-radius: 10px;
+        }
+        .card::-webkit-scrollbar-thumb {
+            background: rgba(255,255,255,0.3);
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 动态粒子画布 -->
+    <canvas id="canvas-bg"></canvas>
+
+    <!-- 主要内容卡片 -->
+    <div class="content">
+        <div class="card">
+            <h1>📂 仓库文件浏览器</h1>
+            <div id="file-list" class="loading">正在加载文件列表...</div>
+        </div>
+    </div>
+
+    <script>
+        // ==================== 粒子特效部分 ====================
+        (function() {
+            const canvas = document.getElementById('canvas-bg');
+            const ctx = canvas.getContext('2d');
+
+            let width, height;
+            let particles = [];
+            const PARTICLE_COUNT = 100;          // 粒子数量
+            const MAX_DISTANCE = 150;             // 连线最大距离
+            const MOUSE_RADIUS = 120;              // 鼠标影响半径
+            const REPEL_FORCE = 0.5;                // 排斥力强度
+
+            let mouseX = null, mouseY = null;       // 鼠标位置（画布坐标系）
+
+            // 初始化粒子
+            function initParticles() {
+                particles = [];
+                for (let i = 0; i < PARTICLE_COUNT; i++) {
+                    particles.push({
+                        x: Math.random() * width,
+                        y: Math.random() * height,
+                        vx: (Math.random() - 0.5) * 1.2,
+                        vy: (Math.random() - 0.5) * 1.2,
+                        size: Math.random() * 2 + 1.5
+                    });
+                }
+            }
+
+            // 调整画布尺寸
+            function resizeCanvas() {
+                width = window.innerWidth;
+                height = window.innerHeight;
+                canvas.width = width;
+                canvas.height = height;
+                initParticles(); // 重新初始化粒子适应新尺寸
+            }
+
+            // 更新粒子位置（包含鼠标交互）
+            function updateParticles() {
+                for (let i = 0; i < particles.length; i++) {
+                    let p = particles[i];
+                    
+                    // 普通移动
+                    p.x += p.vx;
+                    p.y += p.vy;
+
+                    // 边界反弹（加上一点随机变化）
+                    if (p.x < 0 || p.x > width) {
+                        p.vx *= -0.9;
+                        p.x = Math.min(Math.max(p.x, 0), width);
+                    }
+                    if (p.y < 0 || p.y > height) {
+                        p.vy *= -0.9;
+                        p.y = Math.min(Math.max(p.y, 0), height);
+                    }
+
+                    // 鼠标排斥效果（如果鼠标在画布内）
+                    if (mouseX !== null && mouseY !== null) {
+                        const dx = p.x - mouseX;
+                        const dy = p.y - mouseY;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        if (dist < MOUSE_RADIUS && dist > 0.1) {
+                            const force = (MOUSE_RADIUS - dist) / MOUSE_RADIUS * REPEL_FORCE;
+                            const angle = Math.atan2(dy, dx);
+                            p.vx += Math.cos(angle) * force;
+                            p.vy += Math.sin(angle) * force;
+                        }
+                    }
+
+                    // 速度限制
+                    const maxSpeed = 2;
+                    let sp = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+                    if (sp > maxSpeed) {
+                        p.vx = (p.vx / sp) * maxSpeed;
+                        p.vy = (p.vy / sp) * maxSpeed;
+                    }
+                }
+            }
+
+            // 绘制粒子及连线
+            function draw() {
+                ctx.clearRect(0, 0, width, height);
+
+                // 绘制粒子（半透明亮点）
+                ctx.fillStyle = 'rgba(100, 200, 255, 0.8)';
+                for (let p of particles) {
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                // 绘制粒子之间的连线（较远的线更淡）
+                ctx.strokeStyle = 'rgba(100, 200, 255, 0.25)';
+                ctx.lineWidth = 0.8;
+                for (let i = 0; i < particles.length; i++) {
+                    for (let j = i + 1; j < particles.length; j++) {
+                        const p1 = particles[i];
+                        const p2 = particles[j];
+                        const dx = p1.x - p2.x;
+                        const dy = p1.y - p2.y;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        if (dist < MAX_DISTANCE) {
+                            // 透明度随距离变化
+                            const opacity = (1 - dist / MAX_DISTANCE) * 0.5;
+                            ctx.strokeStyle = `rgba(100, 200, 255, ${opacity})`;
+                            ctx.beginPath();
+                            ctx.moveTo(p1.x, p1.y);
+                            ctx.lineTo(p2.x, p2.y);
+                            ctx.stroke();
+                        }
+                    }
+                }
+            }
+
+            // 动画循环
+            function animate() {
+                updateParticles();
+                draw();
+                requestAnimationFrame(animate);
+            }
+
+            // 鼠标追踪
+            function onMouseMove(e) {
+                const rect = canvas.getBoundingClientRect();
+                mouseX = e.clientX - rect.left;
+                mouseY = e.clientY - rect.top;
+            }
+
+            function onMouseLeave() {
+                mouseX = mouseY = null; // 鼠标离开画布，停止影响
+            }
+
+            // 初始化事件
+            window.addEventListener('resize', resizeCanvas);
+            canvas.addEventListener('mousemove', onMouseMove);
+            canvas.addEventListener('mouseleave', onMouseLeave);
+
+            // 启动
+            resizeCanvas();
+            animate();
+        })();
+
+        // ==================== 仓库文件列表部分 ====================
+        (function() {
+            // ⚠️ 请将下面的用户名和仓库名替换为你自己的
+            const username = 'BeiTaaaaaaa';
+            const repo = 'my-mysql-note';
+
+            const fileListDiv = document.getElementById('file-list');
+
+            // 使用 GitHub API 获取仓库根目录内容
+            fetch(`https://api.github.com/repos/${username}/${repo}/contents/`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status} - ${response.statusText}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (!Array.isArray(data)) {
+                        // 可能是单个文件或空仓库
+                        fileListDiv.innerHTML = '<p>仓库为空或返回数据异常。</p>';
+                        return;
+                    }
+                    const itemsHtml = data.map(item => {
+                        const typeClass = item.type === 'dir' ? 'folder' : 'file';
+                        // 链接到 GitHub 上的查看页面
+                        const url = item.html_url;
+                        return `<li class="${typeClass}"><a href="${url}" target="_blank" rel="noopener">${item.name}</a></li>`;
+                    }).join('');
+                    fileListDiv.innerHTML = `<ul>${itemsHtml}</ul>`;
+                })
+                .catch(error => {
+                    fileListDiv.innerHTML = `<p class="error">❌ 加载失败：${error.message}</p>`;
+                });
+        })();
+    </script>
+</body>
+</html>
